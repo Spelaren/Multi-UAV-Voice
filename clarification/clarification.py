@@ -33,7 +33,7 @@ def get_clarification_question(mission_data):
         if uav_id is None:
             return "Which drone should perform the task?"
 
-        # Missing task
+        # Missing task n
         if task is None:
             return f"What should Drone {uav_id} do?"
 
