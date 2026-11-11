@@ -29,7 +29,7 @@ def get_clarification_question(mission_data):
         task = mission.get("task")
         location = mission.get("location")
 
-        # Missing UAV DD
+        # Missing UAV ID
         if uav_id is None:
             return "Which drone should perform the task?"
 
