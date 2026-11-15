@@ -5,7 +5,14 @@ from pathlib import Path
 from datetime import datetime
 import threading
 import importlib.util
+import json
 from slm.slm_engine import SLMEngine
+
+from clarification.clarification import (
+    get_clarification_question,
+    get_grounding_clarification_question,
+    combine_command_with_clarification
+)
 
 from validation.validator import validate_missions
 from validation.grounding import check_command_grounding
@@ -83,6 +90,11 @@ class SLMApp:
         self.slm_engine = SLMEngine()
 
         self.clarification_attempts = 0
+
+        self.awaiting_clarification = False
+        self.original_command = ""
+        self.clarification_question = ""
+
 
         # Used to ignore outdated ASR results
         self.command_version = 0
@@ -659,6 +671,7 @@ class SLMApp:
                 indata.copy()
             )
 
+    
     def start_recording(self):
 
         if self.recording or self.processing:
@@ -667,7 +680,26 @@ class SLMApp:
         self.command_version += 1
         self.cancelled = False
 
-        self.reset_mission_state()
+        # Preserve clarification state when recording
+        # an answer to a pending clarification question.
+        is_clarification = self.awaiting_clarification
+
+        if is_clarification:
+            if self.clarification_attempts >= 2:
+                self.status_label.configure(
+                    text="CLARIFICATION LIMIT REACHED",
+                    fg=RED
+                )
+                self.send_button.configure(state="disabled")
+                self.log("Clarification limit reached: 2 / 2")
+                return
+        else:
+            self.reset_mission_state()
+            self.original_command = ""
+            self.clarification_question = ""
+
+        # Never carry over previous mission authorization.
+        self.send_button.configure(state="disabled")
 
         try:
             self.audio_frames = []
@@ -683,24 +715,39 @@ class SLMApp:
             self.audio_stream.start()
 
             self.status_label.configure(
-                text="RECORDING",
+                text="RECORDING CLARIFICATION"
+                if is_clarification else "RECORDING",
                 fg=RED
             )
 
             self.voice_status.configure(
-                text="Microphone active - speak your command",
+                text=(
+                    "Microphone active - answer clarification question"
+                    if is_clarification
+                    else "Microphone active - speak your command"
+                ),
                 fg=MUTED
             )
 
-            self.start_button.configure(
-                state="disabled"
-            )
+            self.start_button.configure(state="disabled")
+            self.stop_button.configure(state="normal")
 
-            self.stop_button.configure(
-                state="normal"
-            )
+            if is_clarification:
+                self.clarification_attempts += 1
 
-            self.log("Voice recording started manually")
+                self.clarification_label.configure(
+                    text=(
+                        f"Clarification attempts: "
+                        f"{self.clarification_attempts} / 2"
+                    )
+                )
+
+                self.log(
+                    f"Clarification recording started: "
+                    f"{self.clarification_attempts} / 2"
+                )
+            else:
+                self.log("Voice recording started manually")
 
         except Exception as error:
 
@@ -710,13 +757,8 @@ class SLMApp:
                 self.audio_stream.close()
                 self.audio_stream = None
 
-            self.start_button.configure(
-                state="normal"
-            )
-
-            self.stop_button.configure(
-                state="disabled"
-            )
+            self.start_button.configure(state="normal")
+            self.stop_button.configure(state="disabled")
 
             self.status_label.configure(
                 text="MICROPHONE ERROR",
@@ -871,6 +913,7 @@ class SLMApp:
                 error_message
             )
 
+  
     def asr_completed(
         self,
         version,
@@ -880,22 +923,14 @@ class SLMApp:
 
         self.processing = False
 
-        # Ignore results from cancelled commands.
+        # Ignore results from cancelled commands
         if (
             version != self.command_version
             or self.cancelled
         ):
-            self.start_button.configure(
-                state="normal"
-            )
-
+            self.start_button.configure(state="normal")
             self.log("Cancelled ASR result ignored")
             return
-
-        self.status_label.configure(
-            text="TRANSCRIPTION COMPLETED",
-            fg=GREEN
-        )
 
         self.asr_status_label.configure(
             text="Ready",
@@ -907,22 +942,120 @@ class SLMApp:
             fg=TEXT
         )
 
-        self.start_button.configure(
-            state="normal"
-        )
+        self.log(f"ASR transcription: {transcription}")
+        self.log(f"ASR processing time: {asr_time:.2f} s")
 
-        self.log(
-            f"ASR transcription: {transcription}"
-        )
+        # ==================================
+        # CLARIFICATION ANSWER
+        # ==================================
 
-        self.log(
-            f"ASR processing time: {asr_time:.2f} s"
-        )
+        if self.awaiting_clarification:
 
-        self.log("No UAV mission dispatched")
-        self.process_slm(transcription, version)
+            self.log(
+                f"Clarification answer received: {transcription}"
+            )
+
+            combined_command = combine_command_with_clarification(
+                self.original_command,
+                transcription
+            )
+
+            if combined_command is None:
+
+                self.status_label.configure(
+                    text="INVALID CLARIFICATION ANSWER",
+                    fg=RED
+                )
+
+                self.validation_label.configure(
+                    text="Safety validation: REJECTED",
+                    fg=RED
+                )
+
+                self.send_button.configure(state="disabled")
+                self.start_button.configure(state="normal")
+
+                self.log("Clarification answer rejected")
+                self.log("No UAV command dispatched")
+
+                # An empty ASR result counts as an attempt.
+                if self.clarification_attempts >= 2:
+                    self.awaiting_clarification = False
+                    self.clarification_question = ""
+                    self.original_command = ""
+                    self.current_transcription = ""
+
+                    self.status_label.configure(
+                        text="CLARIFICATION LIMIT REACHED",
+                        fg=RED
+                    )
+
+                    self.validation_label.configure(
+                        text="Safety validation: REJECTED",
+                        fg=RED
+                    )
+
+                    self.voice_status.configure(
+                        text="Clarification failed - start a new command",
+                        fg=MUTED
+                    )
+
+                    self.log("Clarification limit reached: 2 / 2")
+                    self.log("Mission rejected - start a new command")
+                else:
+                    self.log(
+                        "Empty clarification - one attempt remains"
+                    )
+
+                return
+
+            # The combined command must pass the SLM,
+            # warehouse validation and grounding again.
+            self.current_transcription = combined_command
+
+            self.log(
+                "Clarification combined with original command"
+            )
+
+            self.log(
+                "Reprocessing combined command through SLM"
+            )
+
+            self.status_label.configure(
+                text="REVALIDATING CLARIFICATION",
+                fg=BLUE
+            )
+
+            self.send_button.configure(state="disabled")
+
+            self.process_slm(
+                combined_command,
+                version
+            )
+
+            return
+
+        # ==================================
+        # NEW VOICE COMMAND
+        # ==================================
+
+        self.original_command = transcription
         self.current_transcription = transcription
-     
+
+        self.status_label.configure(
+            text="TRANSCRIPTION COMPLETED",
+            fg=GREEN
+        )
+
+        self.log("New voice command received")
+        self.log("No UAV mission dispatched")
+
+        # Process the original command through SLM
+        self.process_slm(
+            transcription,
+            version
+        )
+
     # ======================================
     # SLM PROCESSING
     # ======================================
@@ -983,6 +1116,7 @@ class SLMApp:
             )
 
   
+
     def slm_completed(
         self,
         version,
@@ -990,17 +1124,18 @@ class SLMApp:
         slm_time
     ):
         """
-        Validate the SLM output before displaying
-        any mission as approved.
+        Validate the SLM output and manage clarification.
+
+        Maximum clarification attempts: 2.
+        No UAV dispatch is performed.
         """
 
-        # Ignore outdated or cancelled commands
+        # Ignore cancelled or outdated results
         if (
             version != self.command_version
             or self.cancelled
         ):
             self.processing = False
-            self.start_button.configure(state="normal")
             self.log("Cancelled SLM result ignored")
             return
 
@@ -1014,24 +1149,134 @@ class SLMApp:
         self.log(f"SLM processing time: {slm_time:.2f} s")
         self.log(f"SLM output: {model_output}")
 
-        # A new SLM result must never inherit
-        # approval from a previous command.
+        # Always block dispatch.
         self.send_button.configure(state="disabled")
 
         self.mission_label.configure(
             text="UAV: --     Task: --     Location: --",
             fg=MUTED
         )
+  # ======================================
+        # CLARIFICATION LIMIT CHECK
+        # ======================================
+
+        if self.awaiting_clarification and self.clarification_attempts >= 2:
+
+            try:
+                final_valid, final_data = validate_missions(
+                    model_output
+                )
+
+                if final_valid:
+                    final_grounded, _ = check_command_grounding(
+                        self.current_transcription,
+                        final_data
+                    )
+                else:
+                    final_grounded = False
+
+            except Exception:
+                final_valid = False
+                final_grounded = False
+
+            if not (final_valid and final_grounded):
+                self.awaiting_clarification = False
+                self.clarification_question = ""
+                self.original_command = ""
+
+                self.status_label.configure(
+                    text="CLARIFICATION LIMIT REACHED",
+                    fg=RED
+                )
+
+                self.validation_label.configure(
+                    text="Safety validation: REJECTED",
+                    fg=RED
+                )
+
+                self.send_button.configure(state="disabled")
+                self.start_button.configure(state="normal")
+
+                self.log("Clarification limit reached: 2 / 2")
+                self.log("Mission rejected - start a new command")
+                self.log("No UAV command dispatched")
+                return
+        # ==================================
+        # CLARIFICATION HANDLER
+        # ==================================
+
+        def request_clarification(question):
+
+            if not question:
+                return False
+
+            # No more than two clarification recordings.
+            if self.clarification_attempts >= 2:
+                self.awaiting_clarification = False
+                self.clarification_question = ""
+                self.original_command = ""
+
+                self.status_label.configure(
+                    text="CLARIFICATION LIMIT REACHED",
+                    fg=RED
+                )
+
+                self.log(
+                    "Clarification limit reached: 2 / 2"
+                )
+                self.log(
+                    "Mission rejected - start a new command"
+                )
+
+                return False
+
+            self.awaiting_clarification = True
+            self.clarification_question = question
+
+            self.status_label.configure(
+                text="CLARIFICATION REQUIRED",
+                fg=BLUE
+            )
+
+            self.validation_label.configure(
+                text="Safety validation: REJECTED - Clarification pending",
+                fg=RED
+            )
+
+            self.voice_status.configure(
+                text=question,
+                fg=TEXT
+            )
+
+            self.log(f"Clarification required: {question}")
+            self.log(
+                f"Clarification attempts used: "
+                f"{self.clarification_attempts} / 2"
+            )
+
+            self.log(
+                "Press Start Recording to answer"
+            )
+
+            return True
 
         # ==================================
         # STEP 1: WAREHOUSE VALIDATION
         # ==================================
 
-        valid, validation_result = validate_missions(
-            model_output
-        )
+        try:
+            valid, validation_result = validate_missions(
+                model_output
+            )
+
+        except Exception as error:
+            valid = False
+            validation_result = (
+                f"Validation system error: {error}"
+            )
 
         if not valid:
+
             self.status_label.configure(
                 text="MISSION REJECTED",
                 fg=RED
@@ -1047,22 +1292,60 @@ class SLMApp:
                 f"{validation_result}"
             )
 
-            self.log("No UAV command dispatched")
+            # Ask only when the model produced a
+            # structurally recognizable incomplete mission.
+            question = None
+
+            try:
+                mission_data = json.loads(model_output)
+                question = get_clarification_question(
+                    mission_data
+                )
+            except (ValueError, TypeError):
+                pass
+
+            
+            # If the first clarification produced no usable
+            # question, repeat the previous question once.
+            if (
+                question is None
+                and self.awaiting_clarification
+                and self.clarification_attempts < 2
+            ):
+                question = self.clarification_question
+
+            if not request_clarification(question):
+                self.awaiting_clarification = False
+                self.clarification_question = ""
+                self.original_command = ""
+
+
             self.start_button.configure(state="normal")
+            self.log("No UAV command dispatched")
             return
+
+        self.log("Warehouse validation: PASSED")
 
         # ==================================
         # STEP 2: GROUNDING VALIDATION
         # ==================================
 
-        grounded, grounding_message = (
-            check_command_grounding(
-                self.current_transcription,
-                validation_result
+        try:
+            grounded, grounding_message = (
+                check_command_grounding(
+                    self.current_transcription,
+                    validation_result
+                )
             )
-        )
+
+        except Exception as error:
+            grounded = False
+            grounding_message = (
+                f"Grounding system error: {error}"
+            )
 
         if not grounded:
+
             self.status_label.configure(
                 text="MISSION REJECTED",
                 fg=RED
@@ -1078,8 +1361,27 @@ class SLMApp:
                 f"{grounding_message}"
             )
 
-            self.log("No UAV command dispatched")
+            # Do not use clarification to bypass
+            # internal validation errors.
+            question = None
+
+            if not str(grounding_message).startswith(
+                "Grounding system error:"
+            ):
+                question = (
+                    get_grounding_clarification_question(
+                        validation_result,
+                        grounding_message
+                    )
+                )
+
+            if not request_clarification(question):
+                self.awaiting_clarification = False
+                self.clarification_question = ""
+                self.original_command = ""
+
             self.start_button.configure(state="normal")
+            self.log("No UAV command dispatched")
             return
 
         # ==================================
@@ -1103,93 +1405,33 @@ class SLMApp:
         )
 
         self.validation_label.configure(
-            text="Safety validation: APPROVED",
+            text="Safety validation: PASSED",
             fg=GREEN
         )
 
         self.status_label.configure(
-            text="MISSION VALIDATED - AWAITING CONFIRMATION",
+            text="MISSION CHECKS PASSED - DISPATCH DISABLED",
             fg=GREEN
         )
 
-        self.log("Warehouse validation: PASSED")
         self.log("Grounding validation: PASSED")
-        self.log("Mission validated successfully")
+        self.log("Mission passed current validation checks")
 
-        # IMPORTANT:
-        # Dispatch is NOT implemented.
-        # Keep the send button disabled.
+        # Exit clarification mode after success.
+        self.awaiting_clarification = False
+        self.clarification_question = ""
+        self.original_command = ""
+
+        self.voice_status.configure(
+            text="Mission review completed",
+            fg=GREEN
+        )
+
+        # Real UAV dispatch is not implemented.
         self.send_button.configure(state="disabled")
         self.start_button.configure(state="normal")
 
         self.log("No UAV command dispatched")
-
-
-        if (
-            version != self.command_version
-            or self.cancelled
-        ):
-            self.processing = False
-            self.start_button.configure(state="normal")
-            self.log("Cancelled SLM result ignored")
-            return
-
-        self.processing = False
-
-        self.status_label.configure(
-            text="SLM INTERPRETATION COMPLETED",
-            fg=GREEN
-        )
-
-        self.slm_status_label.configure(
-            text="Connected",
-            fg=GREEN
-        )
-
-        self.start_button.configure(state="normal")
-
-        self.log(f"SLM output: {model_output}")
-        self.log(f"SLM processing time: {slm_time:.2f} s")
-        
-        # Validate the SLM output against warehouse rules
-        self.send_button.configure(state="disabled")
-
-        try:
-            valid, result = validate_missions(model_output)
-
-        except Exception as error:
-            valid = False
-            result = f"Validation system error: {error}"
-
-        if valid:
-            self.validation_label.configure(
-                text="Warehouse validation: PASSED",
-                fg=GREEN
-            )
-
-            self.status_label.configure(
-                text="WAREHOUSE VALIDATED - GROUNDING PENDING",
-                fg=BLUE
-            )
-
-            self.log("Warehouse validation: PASSED")
-            self.log("Grounding validation: NOT YET PERFORMED")
-
-        else:
-            self.validation_label.configure(
-                text="Warehouse validation: REJECTED",
-                fg=RED
-            )
-
-            self.status_label.configure(
-                text="MISSION REJECTED",
-                fg=RED
-            )
-
-            self.log(f"Warehouse validation: REJECTED - {result}")
-
-        self.log("No UAV command dispatched")
-
 
     def slm_failed(
         self,

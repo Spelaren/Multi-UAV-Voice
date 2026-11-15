@@ -1,15 +1,16 @@
-
+import json
+from pathlib import Path
 # ==========================================
 # CLARIFICATION MODULE
 # ==========================================
 
+
 def get_clarification_question(mission_data):
     """
-    Check whether a mission is missing required information.
+    Generate clarification questions for incomplete
+    or invalid mission fields.
 
-    Returns:
-        str: A clarification question if information is missing.
-        None: If no clarification is needed.
+    This function never approves a mission.
     """
 
     if not isinstance(mission_data, dict):
@@ -17,8 +18,28 @@ def get_clarification_question(mission_data):
 
     missions = mission_data.get("missions")
 
-    if not isinstance(missions, list):
+    if not isinstance(missions, list) or not missions:
         return None
+
+    # Load valid warehouse identifiers and locations.
+    config_file = (
+        Path(__file__).resolve().parent.parent
+        / "config"
+        / "warehouse.json"
+    )
+
+    try:
+        with open(config_file, "r", encoding="utf-8") as file:
+            warehouse = json.load(file)
+    except (OSError, ValueError):
+        # Fail closed: configuration errors must not
+        # produce a guessed clarification.
+        return None
+
+    valid_uavs = warehouse.get("uavs", {})
+    valid_zones = warehouse.get("zones", [])
+    valid_pallets = warehouse.get("pallet_locations", {})
+    allowed_tasks = warehouse.get("allowed_tasks", [])
 
     for mission in missions:
 
@@ -29,38 +50,50 @@ def get_clarification_question(mission_data):
         task = mission.get("task")
         location = mission.get("location")
 
-        # Missing UAV ID
-        if uav_id is None:
-            return "Which drone should perform the task?"
+        # Missing or invalid UAV ID
+        if (
+            not isinstance(uav_id, str)
+            or uav_id not in valid_uavs
+        ):
+            return "Which valid drone should perform the task?"
 
-        # Missing task n
-        if task is None:
-            return f"What should Drone {uav_id} do?"
+        # Missing or unsupported task
+        if (
+            not isinstance(task, str)
+            or task not in allowed_tasks
+        ):
+            return f"What task should Drone {uav_id} perform?"
 
-        # Missing location
-        if location is None:
+        # Missing or invalid zone
+        if task == "inspect_zone":
+            if (
+                not isinstance(location, str)
+                or location not in valid_zones
+            ):
+                return f"Which valid zone should Drone {uav_id} inspect?"
 
-            if task == "inspect_zone":
-                return (
-                    f"Which zone should Drone {uav_id} inspect?"
-                )
-
-            if task == "inspect_pallet":
-                return (
-                    f"Which pallet should Drone {uav_id} inspect?"
-                )
+        # Missing or invalid pallet
+        if task == "inspect_pallet":
+            if (
+                not isinstance(location, str)
+                or location not in valid_pallets
+            ):
+                return f"Which valid pallet should Drone {uav_id} inspect?"
 
     return None
 
 
 
 
-def get_grounding_clarification_question(mission_data):
+def get_grounding_clarification_question(
+    mission_data,
+    grounding_message=None
+):
     """
-    Generate a clarification question when a mission
-    has failed the grounding check.
+    Ask for the specific information that failed grounding.
 
-    This function does not approve any mission.
+    This function only generates a question.
+    It never validates or authorizes a mission.
     """
 
     if not isinstance(mission_data, dict):
@@ -68,27 +101,36 @@ def get_grounding_clarification_question(mission_data):
 
     missions = mission_data.get("missions")
 
-    if not isinstance(missions, list):
+    if not isinstance(missions, list) or not missions:
         return None
 
-    for mission in missions:
-        if not isinstance(mission, dict):
-            continue
+    message = str(grounding_message or "").lower()
 
-        uav_id = mission.get("uav_id")
-        task = mission.get("task")
+    # UAV identity was not explicitly grounded
+    if "uav" in message or "drone" in message:
+        return "Which drone should perform the task?"
 
-        if not isinstance(uav_id, str):
-            continue
+    # Location was not explicitly grounded
+    if "zone" in message or "pallet" in message or "location" in message:
 
-        if task == "inspect_zone":
-            return f"Which zone should Drone {uav_id} inspect?"
+        for mission in missions:
+            if not isinstance(mission, dict):
+                continue
 
-        if task == "inspect_pallet":
-            return f"Which pallet should Drone {uav_id} inspect?"
+            uav_id = mission.get("uav_id")
+            task = mission.get("task")
 
-    return None
+            if not isinstance(uav_id, str):
+                return "Which drone should perform the task?"
 
+            if task == "inspect_zone":
+                return f"Which zone should Drone {uav_id} inspect?"
+
+            if task == "inspect_pallet":
+                return f"Which pallet should Drone {uav_id} inspect?"
+
+    # Never guess which information was incorrect
+    return "Please repeat the complete command with the drone and location."
 
 
 def combine_command_with_clarification(
