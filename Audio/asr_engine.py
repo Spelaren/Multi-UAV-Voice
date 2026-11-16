@@ -3,6 +3,8 @@ import os
 import time
 from pathlib import Path
 
+from Audio.normalization import normalize_pallet_identifiers
+
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 # Keep CUDA DLL directory handles alive
@@ -64,6 +66,11 @@ class ASREngine:
             segment.text.strip()
             for segment in segments
         ).strip()
+
+        transcription = normalize_pallet_identifiers(
+            transcription
+        )
+
 
         elapsed = time.perf_counter() - start
 

@@ -17,6 +17,8 @@ from clarification.clarification import (
 from validation.validator import validate_missions
 from validation.grounding import check_command_grounding
 
+from validation.correction import validate_location_correction
+
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
@@ -651,6 +653,13 @@ class SLMApp:
             text="Clarification attempts: 0 / 2"
         )
 
+        # Clear previous command and clarification state.
+        self.awaiting_clarification = False
+        self.clarification_question = ""
+        self.original_command = ""
+        self.current_transcription = ""
+
+
     # ======================================
     # MICROPHONE RECORDING
     # ======================================
@@ -695,8 +704,12 @@ class SLMApp:
                 return
         else:
             self.reset_mission_state()
+            
+            self.latest_clarification_answer = ""
             self.original_command = ""
             self.clarification_question = ""
+            self.clarification_reason = ""
+
 
         # Never carry over previous mission authorization.
         self.send_button.configure(state="disabled")
@@ -950,6 +963,51 @@ class SLMApp:
         # ==================================
 
         if self.awaiting_clarification:
+
+            self.latest_clarification_answer = transcription
+
+
+            # Reject invalid pallet corrections before SLM.
+            if self.clarification_reason == "invalid_pallet":
+                correction_valid, correction_message = (
+                    validate_location_correction(
+                        self.original_command,
+                        transcription
+                    )
+                )
+
+                if not correction_valid:
+                    self.status_label.configure(
+                        text="MISSION REJECTED",
+                        fg=RED
+                    )
+
+                    self.validation_label.configure(
+                        text="Safety validation: REJECTED",
+                        fg=RED
+                    )
+
+                    self.log(
+                        f"Pallet correction eligibility: REJECTED - "
+                        f"{correction_message}"
+                    )
+
+                    self.awaiting_clarification = False
+                    self.clarification_question = ""
+                    self.original_command = ""
+                    self.current_transcription = ""
+                    self.latest_clarification_answer = ""
+                    self.clarification_reason = ""
+
+                    self.send_button.configure(state="disabled")
+                    self.start_button.configure(state="normal")
+
+                    self.log(
+                        "Invalid pallet correction - start a new command"
+                    )
+                    self.log("No UAV command dispatched")
+                    return
+
 
             self.log(
                 f"Clarification answer received: {transcription}"
@@ -1292,6 +1350,21 @@ class SLMApp:
                 f"{validation_result}"
             )
 
+            # Record the original warehouse validation failure.
+            # Do not overwrite the reason during clarification.
+            if not self.awaiting_clarification:
+                self.clarification_reason = ""
+
+                if (
+                    isinstance(validation_result, str)
+                    and validation_result.startswith("Mission 1: invalid pallet ")
+                ):
+                    self.clarification_reason = "invalid_pallet"
+                    self.log(
+                        "Clarification reason recorded: invalid_pallet"
+                    )
+
+
             # Ask only when the model produced a
             # structurally recognizable incomplete mission.
             question = None
@@ -1318,6 +1391,9 @@ class SLMApp:
                 self.awaiting_clarification = False
                 self.clarification_question = ""
                 self.original_command = ""
+                self.latest_clarification_answer = ""
+                self.clarification_reason = ""
+
 
 
             self.start_button.configure(state="normal")
@@ -1327,13 +1403,68 @@ class SLMApp:
         self.log("Warehouse validation: PASSED")
 
         # ==================================
+        # VALIDATE INVALID-PALLET CORRECTION
+        # ==================================
+
+        grounding_text = self.current_transcription
+
+        if (
+            self.awaiting_clarification
+            and self.clarification_reason == "invalid_pallet"
+        ):
+            correction_valid, correction_message = (
+                validate_location_correction(
+                    self.original_command,
+                    self.latest_clarification_answer
+                )
+            )
+
+            if correction_valid:
+                grounding_text = self.latest_clarification_answer
+                self.log(
+                    "Pallet correction eligibility: PASSED"
+                )
+            else:
+                self.log(
+                    f"Pallet correction eligibility: REJECTED - "
+                    f"{correction_message}"
+                )
+
+                self.status_label.configure(
+                    text="MISSION REJECTED",
+                    fg=RED
+                )
+
+                self.validation_label.configure(
+                    text="Safety validation: REJECTED",
+                    fg=RED
+                )
+
+                self.send_button.configure(state="disabled")
+
+                self.awaiting_clarification = False
+                self.clarification_question = ""
+                self.original_command = ""
+                self.current_transcription = ""
+                self.latest_clarification_answer = ""
+                self.clarification_reason = ""
+
+                self.start_button.configure(state="normal")
+
+                self.log("Invalid pallet correction - start a new command")
+                self.log("No UAV command dispatched")
+                return
+
+
+
+        # ==================================
         # STEP 2: GROUNDING VALIDATION
         # ==================================
 
         try:
             grounded, grounding_message = (
                 check_command_grounding(
-                    self.current_transcription,
+                    grounding_text,
                     validation_result
                 )
             )
