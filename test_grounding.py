@@ -128,5 +128,270 @@ class TestGrounding(unittest.TestCase):
 
         self.assertTrue(valid)
 
+
+    def test_conflicting_clarification(self):
+        command = (
+            "Drone 1 inspect Zone A. "
+            "Clarification from user: Drone 1 inspect Zone B."
+        )
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "1",
+                    "task": "inspect_zone",
+                    "location": "B"
+                }
+            ]
+        }
+
+        valid, _ = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid)
+
+
+
+
+    def test_missing_uav_mission(self):
+        command = (
+            "Drone 1 inspect Zone A. "
+            "Drone 2 inspect Zone B."
+        )
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "1",
+                    "task": "inspect_zone",
+                    "location": "A"
+                }
+            ]
+        }
+
+        valid, _ = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid)
+
+
+    def test_swapped_uav_destinations(self):
+        command = (
+            "Drone 1 inspect Zone A. "
+            "Drone 2 inspect Zone B."
+        )
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "1",
+                    "task": "inspect_zone",
+                    "location": "B"
+                },
+                {
+                    "uav_id": "2",
+                    "task": "inspect_zone",
+                    "location": "A"
+                }
+            ]
+        }
+
+        valid, _ = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid)
+
+
+
+    def test_wrong_uav_assignment(self):
+        command = "Drone 1 inspect Zone A."
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "2",
+                    "task": "inspect_zone",
+                    "location": "A"
+                }
+            ]
+        }
+
+        valid, _ = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid)
+
+
+    def test_missing_inspect_task(self):
+        command = "Drone 1, Zone A."
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "1",
+                    "task": "inspect_zone",
+                    "location": "A"
+                }
+            ]
+        }
+
+        valid, _ = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid)
+
+
+    def test_valid_mixed_zone_and_pallet_grounding(self):
+        command = (
+            "Drone 1 inspect Zone A. "
+            "Drone 3 inspect pallet P05."
+        )
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "1",
+                    "task": "inspect_zone",
+                    "location": "A"
+                },
+                {
+                    "uav_id": "3",
+                    "task": "inspect_pallet",
+                    "location": "P05"
+                }
+            ]
+        }
+
+        valid, message = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertTrue(valid, message)
+
+
+    def test_wrong_pallet_assignment(self):
+        command = "Drone 3 inspect pallet P05."
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "3",
+                    "task": "inspect_pallet",
+                    "location": "P06"
+                }
+            ]
+        }
+
+        valid, message = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid, message)
+
+
+    def test_conflicting_pallet_locations(self):
+        command = "Drone 3 inspect pallet P05 or pallet P06."
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "3",
+                    "task": "inspect_pallet",
+                    "location": "P05"
+                }
+            ]
+        }
+
+        valid, message = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid, message)
+
+
+    def test_pallet_misinterpreted_as_zone(self):
+        command = "Drone 3 inspect pallet P05."
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "3",
+                    "task": "inspect_zone",
+                    "location": "A"
+                }
+            ]
+        }
+
+        valid, message = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid, message)
+
+
+    def test_zone_misinterpreted_as_pallet(self):
+        command = "Drone 3 inspect Zone A."
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "3",
+                    "task": "inspect_pallet",
+                    "location": "P05"
+                }
+            ]
+        }
+
+        valid, message = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid, message)
+
+
+    def test_swapped_pallet_destinations(self):
+        command = (
+            "Drone 3 inspect pallet P05. "
+            "Drone 4 inspect pallet P06."
+        )
+
+        missions = {
+            "missions": [
+                {
+                    "uav_id": "3",
+                    "task": "inspect_pallet",
+                    "location": "P06"
+                },
+                {
+                    "uav_id": "4",
+                    "task": "inspect_pallet",
+                    "location": "P05"
+                }
+            ]
+        }
+
+        valid, message = check_command_grounding(
+            command,
+            missions
+        )
+
+        self.assertFalse(valid, message)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

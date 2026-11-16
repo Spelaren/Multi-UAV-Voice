@@ -1,0 +1,17 @@
+# Format: type(scope): short description
+# Types: feat, fix, refactor, test, docs, chore
+# Scopes: asr, audio, slm, clarification,
+# validation, config, core
+# Example: fix(clarification): handle unclear voice commands
+#
+# For small changes, write only the subject line above.
+# For significant changes, optionally add:
+#
+# Changes:
+# - What was changed?
+#
+# Reason:
+# - Why was this necessary?
+#
+# Testing:
+# - How was it tested? If not tested, state that.
