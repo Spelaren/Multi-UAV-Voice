@@ -8,6 +8,8 @@ import importlib.util
 import json
 from slm.slm_engine import SLMEngine
 
+from validation.cancellation import contains_explicit_cancellation
+
 from clarification.clarification import (
     get_clarification_question,
     get_grounding_clarification_question,
@@ -957,6 +959,39 @@ class SLMApp:
 
         self.log(f"ASR transcription: {transcription}")
         self.log(f"ASR processing time: {asr_time:.2f} s")
+
+        # ==================================
+        # EARLY CANCELLATION CHECK
+        # ==================================
+
+        if contains_explicit_cancellation(transcription):
+
+            self.log("Explicit cancellation detected before SLM")
+
+            self.reset_mission_state()
+
+            self.status_label.configure(
+                text="COMMAND CANCELLED",
+                fg=RED
+            )
+
+            self.validation_label.configure(
+                text="Safety validation: CANCELLED",
+                fg=RED
+            )
+
+            self.voice_status.configure(
+                text="Voice command cancelled",
+                fg=MUTED
+            )
+
+            self.start_button.configure(state="normal")
+            self.send_button.configure(state="disabled")
+
+            self.log("Command cancelled - no SLM processing")
+            self.log("No UAV command dispatched")
+            return
+
 
         # ==================================
         # CLARIFICATION ANSWER

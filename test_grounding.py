@@ -393,5 +393,33 @@ class TestGrounding(unittest.TestCase):
         self.assertFalse(valid, message)
 
 
+    def test_explicit_cancellation_after_command(self):
+        transcription = (
+            "Drone 3 inspect pallet P05. "
+            "Cancel that command."
+        )
+
+        mission_data = {
+            "missions": [
+                {
+                    "uav_id": "3",
+                    "task": "inspect_pallet",
+                    "location": "P05"
+                }
+            ]
+        }
+
+        grounded, message = check_command_grounding(
+            transcription,
+            mission_data
+        )
+
+        self.assertFalse(grounded)
+        self.assertEqual(
+            message,
+            "Negated or cancelled command"
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
