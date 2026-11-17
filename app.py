@@ -8,6 +8,8 @@ import importlib.util
 import json
 from slm.slm_engine import SLMEngine
 
+from validation.negation import contains_explicit_negation
+
 from validation.cancellation import contains_explicit_cancellation
 
 from clarification.clarification import (
@@ -994,6 +996,38 @@ class SLMApp:
 
 
         # ==================================
+        # EARLY NEGATION CHECK
+        # ==================================
+
+        if contains_explicit_negation(transcription):
+
+            self.log("Explicit negation detected before SLM")
+
+            self.reset_mission_state()
+
+            self.status_label.configure(
+                text="MISSION REJECTED",
+                fg=RED
+            )
+
+            self.validation_label.configure(
+                text="Safety validation: REJECTED",
+                fg=RED
+            )
+
+            self.voice_status.configure(
+                text="Negated command rejected",
+                fg=MUTED
+            )
+
+            self.start_button.configure(state="normal")
+            self.send_button.configure(state="disabled")
+
+            self.log("Negated command rejected - no SLM processing")
+            self.log("No UAV command dispatched")
+            return
+
+        # ==================================
         # CLARIFICATION ANSWER
         # ==================================
 
@@ -1031,6 +1065,7 @@ class SLMApp:
                     self.clarification_question = ""
                     self.original_command = ""
                     self.current_transcription = ""
+                    self.validated_mission = None
                     self.latest_clarification_answer = ""
                     self.clarification_reason = ""
 
