@@ -641,6 +641,10 @@ class SLMApp:
 
         self.send_button.configure(state="disabled")
 
+        # Invalidate any previously validated mission.
+        self.validated_mission = None
+
+
         self.mission_label.configure(
             text="UAV: --     Task: --     Location: --",
             fg=MUTED
@@ -1269,6 +1273,9 @@ class SLMApp:
 
         self.processing = False
 
+        # Invalidate previous approval before validating this result.
+        self.validated_mission = None
+
         self.slm_status_label.configure(
             text="Connected",
             fg=GREEN
@@ -1322,7 +1329,7 @@ class SLMApp:
                     fg=RED
                 )
 
-                self.send_button.configure(state="disabled")
+                self.send_button.configure(state="normal")
                 self.start_button.configure(state="normal")
 
                 self.log("Clarification limit reached: 2 / 2")
@@ -1590,6 +1597,8 @@ class SLMApp:
         # ==================================
 
         missions = validation_result["missions"]
+        # Store the validated mission for later confirmation.
+        self.validated_mission = json.loads(json.dumps(validation_result))
 
         mission_summary = " | ".join(
             (
@@ -1629,7 +1638,7 @@ class SLMApp:
         )
 
         # Real UAV dispatch is not implemented.
-        self.send_button.configure(state="disabled")
+        self.send_button.configure(state="normal")
         self.start_button.configure(state="normal")
 
         self.log("No UAV command dispatched")
@@ -1715,10 +1724,33 @@ class SLMApp:
     # MISSION CONTROL
     # ======================================
 
+    
     def send_mission(self):
-        # No dispatch adapter is integrated.
-        # This remains disabled.
-        return
+
+        # Never confirm during recording or processing.
+        if self.recording or self.processing:
+            self.log("Mission confirmation blocked - system busy")
+            return
+
+        # Require a currently validated mission.
+        if self.validated_mission is None or self.cancelled:
+            self.log("Mission confirmation blocked - no valid mission")
+            self.send_button.configure(state="disabled")
+            return
+
+        # Disable immediately to prevent repeated clicks.
+        self.send_button.configure(state="disabled")
+
+        self.log("Validated mission confirmed by user")
+        self.log("No UAV command dispatched - dispatch adapter not integrated")
+
+        self.validated_mission = None
+
+        self.status_label.configure(
+            text="MISSION CONFIRMED - DISPATCH NOT CONNECTED",
+            fg=GREEN
+        )
+
 
     def cancel_mission(self):
 
