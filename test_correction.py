@@ -102,5 +102,21 @@ class TestLocationCorrection(unittest.TestCase):
         )
 
 
+    def test_reject_uav_change_with_period(self):
+        original = "Drone 4, Inspect Pallet P99"
+        clarification = "Drone 5. Inspect Pallet P05."
+
+        valid, reason = validate_location_correction(
+            original,
+            clarification
+        )
+
+        self.assertFalse(valid)
+        self.assertEqual(
+            reason,
+            "UAV ID cannot change during correction"
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

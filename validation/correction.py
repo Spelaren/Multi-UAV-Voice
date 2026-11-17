@@ -31,7 +31,7 @@ def validate_location_correction(
     # Require one complete pallet inspection command.
   
     pattern = (
-        r"^DRONE\s+([1-8])\s*,?\s*"
+        r"^DRONE\s+([1-8])\s*[,.]?\s*"
         r"INSPECT\s+PALLET\s*,?\s+(P\d+)\s*[.]?$"
     )
 
